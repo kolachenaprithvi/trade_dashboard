@@ -14,6 +14,13 @@ INDEXES = {
 }
 
 
+BANK_STOCKS = {
+    "SBIN": {"label": "SBI", "instrument_key": "NSE_EQ|INE062A01020"},
+    "AXISBANK": {"label": "Axis Bank", "instrument_key": "NSE_EQ|INE238A01034"},
+    "ICICIBANK": {"label": "ICICI Bank", "instrument_key": "NSE_EQ|INE090A01021"},
+    "HDFCBANK": {"label": "HDFC Bank", "instrument_key": "NSE_EQ|INE040A01034"},
+    "KOTAKBANK": {"label": "Kotak Mahindra", "instrument_key": "NSE_EQ|INE237A01036"},
+}
 class UpstoxError(Exception):
     pass
 
@@ -45,6 +52,9 @@ class UpstoxClient:
     async def quotes(self, keys: list[str]) -> dict[str, Any]:
         return await self.get("/v3/market-quote/quotes", {"instrument_key": ",".join(keys)})
 
+    async def futures_search(self, query: str) -> list[dict[str, Any]]:
+        result = await self.get("/v2/instruments/search", {"query": query, "exchanges": "NSE", "segments": "FO", "instrument_types": "FUT", "expiry": "current_month", "page_number": "1", "records": "10"})
+        return result if isinstance(result, list) else []
     async def option_chain(self, key: str, expiry: str) -> list[dict[str, Any]]:
         result = await self.get("/v2/option/chain", {"instrument_key": key, "expiry_date": expiry})
         return result if isinstance(result, list) else []

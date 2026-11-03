@@ -8,7 +8,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .upstox import INDEXES, UpstoxClient, UpstoxError
+from .upstox import BANK_STOCKS, INDEXES, UpstoxClient, UpstoxError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("tradely")
@@ -26,7 +26,7 @@ def require_password(supplied: str | None) -> None:
 
 
 def empty_snapshot() -> dict:
-    return {"mode": "demo", "status": "token_missing", "asOf": None, "indices": {}, "technicals": {}, "message": "Add a server-side Upstox access token to enable market data."}
+    return {"mode": "demo", "status": "token_missing", "asOf": None, "indices": {}, "bankStocks": {}, "technicals": {}, "message": "Add a server-side Upstox access token to enable market data."}
 
 
 def validate_option_symbol(symbol: str) -> str:
@@ -41,16 +41,33 @@ async def snapshot() -> dict:
         return empty_snapshot()
     try:
         api = UpstoxClient(settings.upstox_access_token)
-        data = await api.quotes(list(INDEXES.values()))
-        technical_data = await api.ohlc(list(INDEXES.values()))
+        all_keys = [*INDEXES.values(), *(stock["instrument_key"] for stock in BANK_STOCKS.values())]
+        data = await api.quotes(all_keys)
+        try:
+            technical_data = await api.ohlc(list(INDEXES.values()))
+        except UpstoxError:
+            # Keep valid quote snapshots even if the optional OHLC endpoint is unavailable.
+            technical_data = {}
+
+        def quote_for(key: str):
+            item = next((v for v in data.values() if v.get("instrument_token") == key), None)
+            if not item:
+                return None
+            return {"instrumentKey": item.get("instrument_token", key), "lastPrice": item.get("last_price"), "change": item.get("net_change"), "volume": item.get("volume"), "oi": item.get("oi"), "timestamp": item.get("timestamp"), "ohlc": item.get("ohlc")}
+
         quotes = {}
         for symbol, key in INDEXES.items():
-            item = next((v for v in data.values() if v.get("instrument_token") == key), None)
-            if item:
-                quotes[symbol] = {"instrumentKey": item.get("instrument_token", key), "lastPrice": item.get("last_price"), "change": item.get("net_change"), "volume": item.get("volume"), "oi": item.get("oi"), "timestamp": item.get("timestamp"), "ohlc": item.get("ohlc")}
-        return {"mode": "snapshot", "status": "connected", "asOf": now_iso(), "indices": quotes, "technicals": technical_data, "message": None}
+            quote = quote_for(key)
+            if quote:
+                quotes[symbol] = quote
+        banks = {}
+        for symbol, stock in BANK_STOCKS.items():
+            quote = quote_for(stock["instrument_key"])
+            if quote:
+                banks[symbol] = {**quote, "label": stock["label"]}
+        return {"mode": "snapshot", "status": "connected", "asOf": now_iso(), "indices": quotes, "bankStocks": banks, "technicals": technical_data, "message": None}
     except UpstoxError as exc:
-        return {"mode": "unavailable", "status": "upstream_error", "asOf": now_iso(), "indices": {}, "technicals": {}, "message": str(exc)}
+        return {"mode": "unavailable", "status": "upstream_error", "asOf": now_iso(), "indices": {}, "bankStocks": {}, "technicals": {}, "message": str(exc)}
 
 
 @asynccontextmanager
@@ -74,6 +91,36 @@ async def dashboard(x_dashboard_password: str | None = Header(default=None)):
     require_password(x_dashboard_password)
     return await snapshot()
 
+
+@app.get("/api/futures")
+async def futures(x_dashboard_password: str | None = Header(default=None)):
+    require_password(x_dashboard_password)
+    if not settings.upstox_access_token:
+        return {"mode": "demo", "status": "token_missing", "rows": [], "message": "Configure the server-side Upstox access token."}
+    try:
+        api = UpstoxClient(settings.upstox_access_token)
+        symbols = [symbol for symbol in INDEXES if symbol != "INDIA_VIX"]
+        results = await asyncio.gather(*(api.futures_search(symbol) for symbol in symbols))
+        contracts = []
+        for symbol, matches in zip(symbols, results):
+            candidates = [item for item in matches if item.get("instrument_type") == "FUT" and item.get("instrument_key")]
+            if candidates:
+                # The API filters to current_month; prefer the earliest valid expiry returned.
+                contract = sorted(candidates, key=lambda item: item.get("expiry", "9999-12-31"))[0]
+                contracts.append((symbol, contract))
+        quotes = await api.quotes([item["instrument_key"] for _, item in contracts]) if contracts else {}
+        rows = []
+        for symbol, contract in contracts:
+            item = next((value for value in quotes.values() if value.get("instrument_token") == contract["instrument_key"]), None)
+            if not item:
+                continue
+            spot = INDEXES[symbol]
+            spot_item = None
+            # Include spot keys in the same quote request on the next request; see request keys below.
+            rows.append({"symbol": symbol, "tradingSymbol": contract.get("trading_symbol"), "expiry": contract.get("expiry"), "instrumentKey": contract["instrument_key"], "lastPrice": item.get("last_price"), "change": item.get("net_change"), "oi": item.get("oi"), "previousOi": item.get("previous_oi"), "spotKey": spot, "spot": spot_item})
+        return {"mode": "snapshot", "status": "connected", "asOf": now_iso(), "rows": rows, "message": None}
+    except UpstoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/option-chain/{symbol}")
 async def option_chain(symbol: str, expiry: str = Query(default="current_week"), x_dashboard_password: str | None = Header(default=None)):

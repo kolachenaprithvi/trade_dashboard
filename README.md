@@ -1,55 +1,73 @@
 # Tradely Index Terminal
 
-Private NSE index F&O dashboard with a React + Vite + TypeScript frontend and FastAPI backend. The GitHub source repository is public as requested; dashboard API access is password-protected. Supported instruments: NIFTY, BANK NIFTY, FINNIFTY, MIDCPNIFTY and India VIX.
+A private NSE index F&O dashboard foundation with a React + Vite + TypeScript frontend and a FastAPI backend. The backend owns all Upstox calls and secrets. The UI supports NIFTY, BANK NIFTY, FINNIFTY, MIDCPNIFTY and India VIX, with index overview, futures, option chain, OI analytics, technicals, and connection freshness modules.
 
-## Data and safety
+## Current data behavior
 
-- Without UPSTOX_ACCESS_TOKEN, the UI uses explicit empty/demo states and never invents live prices.
-- All Upstox calls and credentials stay on the backend. Never commit tokens or passwords. Set them only in local environment variables or the hosting provider's secret settings.
-- The backend currently relays snapshot refreshes over its WebSocket. This is not Upstox Market Data Feed V3. Futures and analytics remain empty until real contract mapping/feed data is configured.
-- API routes require DASHBOARD_PASSWORD; REST uses X-Dashboard-Password, WebSocket authenticates with the first frame.
+- With no `UPSTOX_ACCESS_TOKEN`, the app shows clearly labeled demo/empty states. It never invents prices.
+- With a valid server-side Upstox access token, index quotes, daily OHLC snapshots, and live quotes for SBI, Axis Bank, ICICI Bank, HDFC Bank, and Kotak Mahindra Bank can be requested. The bank box shows quotes and price change only; it does not invent constituent weights. Upstox says manual access tokens are generated from Developer Apps; auth is OAuth, and the access token is sent as a bearer token. Tokens should be treated as private and may need regular regeneration.
+- The browser connects to the backend WebSocket, which relays snapshot refreshes and heartbeat/freshness state. This is **snapshot mode**, not Upstox's streaming Market Data Feed V3. The official V3 feed requires a bearer-authenticated WebSocket, follows a redirect, and uses binary Protobuf messages. Implementing that upstream feed safely requires confirming the exact account entitlement and testing its current Protobuf schema with your token. No feed scope is assumed here.
+- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals from returned strikes. Overview shows the live snapshot and session OHLC; a chart still needs candle history, which this version does not request.
 
-## Run locally
+## Local run
 
-1. Copy .env.example to .env, set a long DASHBOARD_PASSWORD, and leave UPSTOX_ACCESS_TOKEN blank for a safe empty-state preview.
-2. Start the backend (Python 3.11+):
+1. Copy `.env.example` to `.env` in the repository root and set a long `DASHBOARD_PASSWORD`. Keep `UPSTOX_ACCESS_TOKEN` blank for an empty-state preview, or set it privately in your local environment. Never paste a real token into source files or commit it.
+2. Backend (Python 3.11+):
 
-    cd backend
-    python -m venv .venv
-    # Windows: .venv\Scripts\Activate.ps1
-    # macOS/Linux: source .venv/bin/activate
-    pip install -r requirements.txt
-    uvicorn app.main:app --reload --port 8000
+   ```sh
+   cd backend
+   python -m venv .venv
+   # Windows: .venv\\Scripts\\Activate.ps1
+   # macOS/Linux: source .venv/bin/activate
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+   ```
 
-3. In another terminal, start the frontend (Node 20+):
+3. Frontend (Node 20+):
 
-    cd frontend
-    npm ci
-    npm run dev
+   ```sh
+   cd frontend
+   npm install
+   npm run dev
+   ```
 
-Open the Vite URL and enter the same dashboard password. The Vite server proxies /api and /ws to localhost:8000.
+The Vite dev server proxies `/api` and `/ws` to `http://localhost:8000`. Enter `DASHBOARD_PASSWORD` in the app's access prompt. The browser keeps that password only for its current tab session.
 
-## Cloud hosting
+## Private zero-cost hosting outline
 
-Target: Cloudflare Pages frontend and Render free backend. The Render free service can sleep when idle and has ephemeral storage, so it is not suitable for uninterrupted intraday monitoring. No persistence is required by this MVP.
+The project source is available in this public GitHub repository. Apply the root `render.yaml` Blueprint to create the backend from `backend/`. The Blueprint prompts you to set `DASHBOARD_PASSWORD` in Render. Keep credentials out of this public repository.
 
-### Render
+### Render backend
 
-- Apply the root render.yaml Blueprint from the public repository. Set DASHBOARD_PASSWORD privately when prompted.
-- Set UPSTOX_ACCESS_TOKEN later in the Render service's Environment settings. The access token is optional for the empty-state UI.
-- Once the Pages hostname exists, set CORS_ORIGINS to that exact origin in Render and redeploy.
+- Apply the root `render.yaml` Blueprint to create the **Web Service** from `backend/`. The Blueprint prompts you for `DASHBOARD_PASSWORD`. When ready, add `UPSTOX_ACCESS_TOKEN` in Render Environment. After creating the Cloudflare Pages site, set `CORS_ORIGINS` to its exact origin. Do not place credentials in build arguments, frontend variables, logs, or Git.
+- Free instances sleep after 15 minutes without inbound HTTP/WebSocket traffic, can take about a minute to wake, and have an ephemeral filesystem. This app doesn't rely on local persistence. It is unsuitable for uninterrupted intraday monitoring on the free tier.
+- For stronger private access, put the Pages hostname behind Cloudflare Access and restrict it to your identity. The backend's password gate remains enabled as a second app-level check.
 
-### Cloudflare Pages
+### Cloudflare Pages frontend
 
-- Connect this repository; root directory frontend; build command npm ci && npm run build; output directory dist.
-- Set build variable VITE_API_BASE_URL to the Render service URL, for example https://your-service.onrender.com.
-- Configure Cloudflare Access on the Pages hostname to restrict it to your identity; the dashboard password remains an additional check.
+- Create a Pages project from this repository; root directory `frontend`, build command `npm ci && npm run build`, output directory `dist`.
+- Set `VITE_API_BASE_URL` to the Render service URL, for example `https://your-service.onrender.com`.
+- Add the Pages production URL to backend `CORS_ORIGINS`, then redeploy the backend.
+- Pages static assets are suitable for the free tier; serverless Functions have separate request quotas. This frontend uses a static build and calls the Render API directly.
 
-## API
+The repository is public, but dashboard API routes are password-protected. Configure Cloudflare Access for the Pages site as an additional private access layer before sharing its URL. Free-tier terms and quotas can change; verify provider dashboards before relying on them.
 
-- GET /api/health returns readiness without disclosing credentials.
-- GET /api/dashboard returns available index snapshots.
-- GET /api/option-chain/{symbol}?expiry=current_week fetches an option chain.
-- The server redacts bearer tokens/passwords in errors and logs. Avoid proxy request header/body logging.
+## API and security
 
-Official references checked 2 Nov 2026: [Upstox auth](https://upstox.com/developer/api-documentation/authentication/), [Market Data Feed V3](https://upstox.com/developer/api-documentation/v3/get-market-data-feed/), [Full Market Quotes](https://upstox.com/developer/api-documentation/get-full-market-quote-v3/), [Option Contracts](https://upstox.com/developer/api-documentation/get-option-contracts/), [Option Chain](https://upstox.com/developer/api-documentation/get-pc-option-chain/), [Render free services](https://render.com/docs/free).
+- `GET /api/health` reports readiness without revealing credentials.
+- `GET /api/dashboard` returns index snapshots if configured.
+- `GET /api/option-chain/{symbol}?expiry=current_week` fetches an option chain.
+- `GET /api/futures` resolves current-month index futures and fetches their quotes.
+- `WS /ws` is authenticated by a password in the first WebSocket frame (browser WebSockets do not support custom authorization headers). Use HTTPS/WSS in deployment. The REST API uses `X-Dashboard-Password`.
+- The backend redacts bearer tokens and password values from errors/logging. Do not enable request header/body logging at the proxy.
+
+## Official API references checked (3 Nov 2026)
+
+- [Upstox Authentication](https://upstox.com/developer/api-documentation/authentication/)
+- [Upstox Market Data Feed V3](https://upstox.com/developer/api-documentation/v3/get-market-data-feed/)
+- [Upstox Full Market Quotes V3](https://upstox.com/developer/api-documentation/get-full-market-quote-v3/)
+- [Upstox Instrument Search](https://upstox.com/developer/api-documentation/instrument-search/)
+- [Upstox Option Contracts](https://upstox.com/developer/api-documentation/get-option-contracts/)
+- [Upstox Put/Call Option Chain](https://upstox.com/developer/api-documentation/get-pc-option-chain/)
+- [Render Free Services](https://render.com/docs/free)
+- [Cloudflare Pages Functions Pricing](https://developers.cloudflare.com/pages/functions/pricing/)

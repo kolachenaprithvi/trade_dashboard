@@ -158,3 +158,21 @@ async def websocket(websocket: WebSocket):
             await websocket.close(code=1011, reason="Temporary server error")
         except Exception:
             pass
+
+@app.get("/api/candles/{symbol}")
+async def candles(
+    symbol: str,
+    timeframe: str = Query(default="daily", pattern="^(daily|intraday)$"),
+    x_dashboard_password: str | None = Header(default=None),
+):
+    require_password(x_dashboard_password)
+    normalized = symbol.upper()
+    if normalized not in INDEXES:
+        raise HTTPException(status_code=404, detail="Unknown market index")
+    if not settings.upstox_access_token:
+        return {"mode": "demo", "status": "token_missing", "symbol": normalized, "timeframe": timeframe, "candles": [], "asOf": None}
+    try:
+        rows = await UpstoxClient(settings.upstox_access_token).candles(INDEXES[normalized], timeframe)
+        return {"mode": "snapshot", "status": "connected", "symbol": normalized, "timeframe": timeframe, "candles": rows, "asOf": now_iso()}
+    except UpstoxError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

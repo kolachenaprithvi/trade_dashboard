@@ -65,3 +65,17 @@ class UpstoxClient:
 
     async def ohlc(self, keys: list[str]) -> dict[str, Any]:
         return await self.get("/v3/market-quote/ohlc", {"instrument_key": ",".join(keys), "interval": "1d"})
+
+    async def candles(self, key: str, timeframe: str) -> list[list[Any]]:
+        from datetime import date, timedelta
+
+        if timeframe == "intraday":
+            data = await self.get(f"/v3/historical-candle/intraday/{key}/minutes/15", {})
+        else:
+            end = date.today()
+            start = end - timedelta(days=240)
+            data = await self.get(
+                f"/v3/historical-candle/{key}/days/1/{end.isoformat()}/{start.isoformat()}", {}
+            )
+        candles = data.get("candles", []) if isinstance(data, dict) else []
+        return candles if isinstance(candles, list) else []

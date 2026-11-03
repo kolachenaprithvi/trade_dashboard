@@ -7,7 +7,7 @@ A private NSE index F&O dashboard foundation with a React + Vite + TypeScript fr
 - With no `UPSTOX_ACCESS_TOKEN`, the app shows clearly labeled demo/empty states. It never invents prices.
 - With a valid server-side Upstox access token, index quotes, daily OHLC snapshots, and live quotes for SBI, Axis Bank, ICICI Bank, HDFC Bank, and Kotak Mahindra Bank can be requested. The bank box shows quotes and price change only; it does not invent constituent weights. Upstox says manual access tokens are generated from Developer Apps; auth is OAuth, and the access token is sent as a bearer token. Tokens should be treated as private and may need regular regeneration.
 - The browser connects to the backend WebSocket, which relays snapshot refreshes and heartbeat/freshness state. This is **snapshot mode**, not Upstox's streaming Market Data Feed V3. The official V3 feed requires a bearer-authenticated WebSocket, follows a redirect, and uses binary Protobuf messages. Implementing that upstream feed safely requires confirming the exact account entitlement and testing its current Protobuf schema with your token. No feed scope is assumed here.
-- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals from returned strikes. Overview shows the live snapshot and session OHLC; a chart still needs candle history, which this version does not request.
+- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals from returned strikes. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes.
 
 ## Local run
 
@@ -58,6 +58,7 @@ The repository is public, but dashboard API routes are password-protected. Confi
 - `GET /api/dashboard` returns index snapshots if configured.
 - `GET /api/option-chain/{symbol}?expiry=current_week` fetches an option chain.
 - `GET /api/futures` resolves current-month index futures and fetches their quotes.
+- `GET /api/candles/{symbol}?timeframe=daily` returns verified daily candles for technical analysis.
 - `WS /ws` is authenticated by a password in the first WebSocket frame (browser WebSockets do not support custom authorization headers). Use HTTPS/WSS in deployment. The REST API uses `X-Dashboard-Password`.
 - The backend redacts bearer tokens and password values from errors/logging. Do not enable request header/body logging at the proxy.
 
@@ -69,5 +70,13 @@ The repository is public, but dashboard API routes are password-protected. Confi
 - [Upstox Instrument Search](https://upstox.com/developer/api-documentation/instrument-search/)
 - [Upstox Option Contracts](https://upstox.com/developer/api-documentation/get-option-contracts/)
 - [Upstox Put/Call Option Chain](https://upstox.com/developer/api-documentation/get-pc-option-chain/)
+- [Upstox Historical Candle Data V3](https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/)
 - [Render Free Services](https://render.com/docs/free)
 - [Cloudflare Pages Functions Pricing](https://developers.cloudflare.com/pages/functions/pricing/)
+
+
+## Indicators and strategy context
+
+- Indicator calculations use daily OHLC candles returned by Upstox. Missing history or insufficient bars produce empty indicator values, never synthetic data.
+- Strategy Lab can display an aligned debit vertical only when EMA 20/50 and Supertrend agree and both option legs have usable bid/ask quotes. Premiums, maximum loss, maximum gain, and breakeven are per index point; lot size and charges are not included.
+- The dashboard does not claim a spread win rate or predictive probability. A credible rate requires historical option-chain prices, conservative fills, costs, and out-of-sample validation. The displayed swing context and spread are research aids, not orders or a guarantee of results.

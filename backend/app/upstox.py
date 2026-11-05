@@ -8,8 +8,6 @@ BASE = "https://api.upstox.com"
 INDEXES = {
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
-    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
-    "MIDCPNIFTY": "NSE_INDEX|Nifty Midcap Select",
     "INDIA_VIX": "NSE_INDEX|India VIX",
 }
 

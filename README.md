@@ -1,13 +1,13 @@
 # Tradely Index Terminal
 
-A private NSE index F&O dashboard foundation with a React + Vite + TypeScript frontend and a FastAPI backend. The backend owns all Upstox calls and secrets. The UI supports NIFTY, BANK NIFTY, FINNIFTY, MIDCPNIFTY and India VIX, with index overview, futures, option chain, OI analytics, technicals, and connection freshness modules.
+A private NSE index F&O dashboard foundation with a React + Vite + TypeScript frontend and a FastAPI backend. The backend owns all Upstox calls and secrets. The UI supports NIFTY, BANK NIFTY and India VIX, with index overview, futures, option chain, OI analytics, technicals, and connection freshness modules.
 
 ## Current data behavior
 
 - With no `UPSTOX_ACCESS_TOKEN`, the app shows clearly labeled demo/empty states. It never invents prices.
 - With a valid server-side Upstox access token, index quotes, daily OHLC snapshots, and live quotes for SBI, Axis Bank, ICICI Bank, HDFC Bank, and Kotak Mahindra Bank can be requested. The bank box shows quotes and price change only; it does not invent constituent weights. Upstox says manual access tokens are generated from Developer Apps; auth is OAuth, and the access token is sent as a bearer token. Tokens should be treated as private and may need regular regeneration.
 - The browser connects to the backend WebSocket, which relays snapshot refreshes and heartbeat/freshness state. This is **snapshot mode**, not Upstox's streaming Market Data Feed V3. The official V3 feed requires a bearer-authenticated WebSocket, follows a redirect, and uses binary Protobuf messages. Implementing that upstream feed safely requires confirming the exact account entitlement and testing its current Protobuf schema with your token. No feed scope is assumed here.
-- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals from returned strikes. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes.
+- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals and call/put OI changes from returned strikes when Upstox provides previous OI. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes. A Light/Dark selector remembers the choice in this browser.
 
 ## Local run
 

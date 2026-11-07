@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,7 +8,7 @@ class Settings(BaseSettings):
     dashboard_password: str = ""
     cors_origins: str = "http://localhost:5173"
     snapshot_interval_seconds: int = 15
-    model_config = SettingsConfigDict(env_file="../.env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[2] / ".env", extra="ignore")
 
     @property
     def origins(self) -> list[str]:

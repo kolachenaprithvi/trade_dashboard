@@ -123,7 +123,7 @@ async def futures(x_dashboard_password: str | None = Header(default=None)):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/option-chain/{symbol}")
-async def option_chain(symbol: str, expiry: str = Query(default="current_week"), x_dashboard_password: str | None = Header(default=None)):
+async def option_chain(symbol: str, expiry: str = Query(default="current_month"), x_dashboard_password: str | None = Header(default=None)):
     require_password(x_dashboard_password)
     normalized = validate_option_symbol(symbol)
     if not settings.upstox_access_token:

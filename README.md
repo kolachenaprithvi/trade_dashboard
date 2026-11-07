@@ -7,7 +7,7 @@ A private NSE index F&O dashboard foundation with a React + Vite + TypeScript fr
 - With no `UPSTOX_ACCESS_TOKEN`, the app shows clearly labeled demo/empty states. It never invents prices.
 - With a valid server-side Upstox access token, index quotes, daily OHLC snapshots, and live quotes for SBI, Axis Bank, ICICI Bank, HDFC Bank, and Kotak Mahindra Bank can be requested. The bank box shows quotes and price change only; it does not invent constituent weights. Upstox says manual access tokens are generated from Developer Apps; auth is OAuth, and the access token is sent as a bearer token. Tokens should be treated as private and may need regular regeneration.
 - The browser connects to the backend WebSocket, which relays snapshot refreshes and heartbeat/freshness state. This is **snapshot mode**, not Upstox's streaming Market Data Feed V3. The official V3 feed requires a bearer-authenticated WebSocket, follows a redirect, and uses binary Protobuf messages. Implementing that upstream feed safely requires confirming the exact account entitlement and testing its current Protobuf schema with your token. No feed scope is assumed here.
-- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain and computes PCR/OI totals and call/put OI changes from returned strikes when Upstox provides previous OI. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes. A Light/Dark selector remembers the choice in this browser.
+- The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain, computes PCR/OI totals, and charts call/put OI change by strike when Upstox provides previous OI; the chart can show strikes around ATM or the full returned chain. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes. A Light/Dark selector remembers the choice in this browser.
 
 ## Local run
 
@@ -33,6 +33,8 @@ A private NSE index F&O dashboard foundation with a React + Vite + TypeScript fr
 
 The Vite dev server proxies `/api` and `/ws` to `http://localhost:8000`. Enter `DASHBOARD_PASSWORD` in the app's access prompt. The browser keeps that password only for its current tab session.
 
+If the page reports that the dashboard password is not configured, confirm that `.env` exists in the repository root, contains your `DASHBOARD_PASSWORD`, and restart the backend. The password entered in the browser must match it.
+
 ## Private zero-cost hosting outline
 
 The project source is available in this public GitHub repository. Apply the root `render.yaml` Blueprint to create the backend from `backend/`. The Blueprint prompts you to set `DASHBOARD_PASSWORD` in Render. Keep credentials out of this public repository.
@@ -56,7 +58,7 @@ The repository is public, but dashboard API routes are password-protected. Confi
 
 - `GET /api/health` reports readiness without revealing credentials.
 - `GET /api/dashboard` returns index snapshots if configured.
-- `GET /api/option-chain/{symbol}?expiry=current_week` fetches an option chain.
+- `GET /api/option-chain/{symbol}?expiry=current_month` fetches the current-month option chain by default.
 - `GET /api/futures` resolves current-month index futures and fetches their quotes.
 - `GET /api/candles/{symbol}?timeframe=daily` returns verified daily candles for technical analysis.
 - `WS /ws` is authenticated by a password in the first WebSocket frame (browser WebSockets do not support custom authorization headers). Use HTTPS/WSS in deployment. The REST API uses `X-Dashboard-Password`.

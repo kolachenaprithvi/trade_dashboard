@@ -1,4 +1,5 @@
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -65,15 +66,52 @@ class UpstoxClient:
         return await self.get("/v3/market-quote/ohlc", {"instrument_key": ",".join(keys), "interval": "1d"})
 
     async def candles(self, key: str, timeframe: str) -> list[list[Any]]:
-        from datetime import date, timedelta
-
-        if timeframe == "intraday":
-            data = await self.get(f"/v3/historical-candle/intraday/{key}/minutes/15", {})
-        else:
-            end = date.today()
+        end = date.today()
+        history_start = date(2000, 1, 1)
+        if timeframe in {"1m", "3m", "5m", "10m", "15m", "intraday"}:
+            unit, interval = "minutes", "15" if timeframe == "intraday" else timeframe[:-1]
+            start = end - timedelta(days=29)
+        elif timeframe == "30m":
+            unit, interval = "minutes", "30"
+            start = end - timedelta(days=90)
+        elif timeframe in {"1h", "2h", "3h", "4h"}:
+            unit, interval = "hours", timeframe[:-1]
+            start = end - timedelta(days=90)
+        elif timeframe == "1d":
+            unit, interval = "days", "1"
+            start = end - timedelta(days=3650)
+        elif timeframe == "daily":
+            unit, interval = "days", "1"
             start = end - timedelta(days=240)
-            data = await self.get(
-                f"/v3/historical-candle/{key}/days/1/{end.isoformat()}/{start.isoformat()}", {}
-            )
+        elif timeframe == "1w":
+            unit, interval, start = "weeks", "1", history_start
+        elif timeframe == "1mo":
+            unit, interval, start = "months", "1", history_start
+        elif timeframe == "1y":
+            unit, interval, start = "months", "1", history_start
+        else:
+            raise ValueError(f"Unsupported candle timeframe: {timeframe}")
+
+        data = await self.get(
+            f"/v3/historical-candle/{key}/{unit}/{interval}/{end.isoformat()}/{start.isoformat()}", {}
+        )
         candles = data.get("candles", []) if isinstance(data, dict) else []
-        return candles if isinstance(candles, list) else []
+        if not isinstance(candles, list):
+            return []
+        if timeframe != "1y":
+            return candles
+
+        annual: dict[int, list[Any]] = {}
+        for candle in sorted(candles, key=lambda row: row[0]):
+            year = date.fromisoformat(candle[0][:10]).year
+            if year not in annual:
+                annual[year] = list(candle)
+            else:
+                current = annual[year]
+                current[2] = max(current[2], candle[2])
+                current[3] = min(current[3], candle[3])
+                current[4] = candle[4]
+                current[5] += candle[5]
+                if len(current) > 6 and len(candle) > 6:
+                    current[6] = candle[6]
+        return list(annual.values())

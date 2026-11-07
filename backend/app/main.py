@@ -3,15 +3,23 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from time import monotonic
+from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from .config import settings
+from .swing_trade import SwingTradeDataError, build_swing_trade_workbook, run_swing_trade_scan
 from .upstox import BANK_STOCKS, INDEXES, UpstoxClient, UpstoxError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("tradely")
+SWING_EXPORT_TTL_SECONDS = 30 * 60
+SWING_EXPORT_LIMIT = 5
+_swing_exports: dict[str, tuple[float, str, bytes]] = {}
+_swing_scan_lock = asyncio.Lock()
 
 
 def now_iso() -> str:
@@ -78,7 +86,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Tradely Index Terminal API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=False, allow_methods=["GET"], allow_headers=["X-Dashboard-Password", "Content-Type"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["X-Dashboard-Password", "Content-Type"])
 
 
 @app.get("/api/health")
@@ -176,3 +184,48 @@ async def candles(
         return {"mode": "snapshot", "status": "connected", "symbol": normalized, "timeframe": timeframe, "candles": rows, "asOf": now_iso()}
     except UpstoxError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/swing-trade/scan")
+async def swing_trade_scan(x_dashboard_password: str | None = Header(default=None)):
+    require_password(x_dashboard_password)
+    if not settings.upstox_access_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Configure the server-side Upstox access token to run a swing scan.",
+        )
+    if _swing_scan_lock.locked():
+        raise HTTPException(status_code=409, detail="A swing scan is already running. Please wait for it to finish.")
+    async with _swing_scan_lock:
+        try:
+            result = await run_swing_trade_scan(settings.upstox_access_token)
+            filename, workbook = build_swing_trade_workbook(result)
+        except SwingTradeDataError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        now = monotonic()
+        for scan_id, (expires_at, _, _) in list(_swing_exports.items()):
+            if expires_at <= now:
+                del _swing_exports[scan_id]
+        while len(_swing_exports) >= SWING_EXPORT_LIMIT:
+            oldest = min(_swing_exports, key=lambda scan_id: _swing_exports[scan_id][0])
+            del _swing_exports[oldest]
+
+        scan_id = uuid4().hex
+        _swing_exports[scan_id] = (now + SWING_EXPORT_TTL_SECONDS, filename, workbook)
+        return {**result, "scanId": scan_id, "fileName": filename}
+
+
+@app.get("/api/swing-trade/export/{scan_id}")
+def swing_trade_export(scan_id: str, x_dashboard_password: str | None = Header(default=None)):
+    require_password(x_dashboard_password)
+    export = _swing_exports.get(scan_id)
+    if export is None or export[0] <= monotonic():
+        _swing_exports.pop(scan_id, None)
+        raise HTTPException(status_code=404, detail="This scan export has expired. Run the scan again.")
+    _, filename, workbook = export
+    return Response(
+        content=workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

@@ -1,6 +1,6 @@
 # Tradely Index Terminal
 
-A private NSE index F&O dashboard foundation with a React + Vite + TypeScript frontend and a FastAPI backend. The backend owns all Upstox calls and secrets. The UI supports NIFTY, BANK NIFTY and India VIX, with index overview, futures, option chain, OI analytics, technicals, and connection freshness modules.
+A private NSE index F&O dashboard foundation with a React + Vite + TypeScript frontend and a FastAPI backend. The backend owns all Upstox calls and secrets. The UI supports NIFTY, BANK NIFTY and India VIX, with index overview, futures, option chain, OI analytics, technicals, and connection freshness modules. The left rail also includes a Swing Trade screen for an on-demand directional stock scan and Excel export.
 
 ## Current data behavior
 
@@ -9,6 +9,7 @@ A private NSE index F&O dashboard foundation with a React + Vite + TypeScript fr
 - The browser connects to the backend WebSocket, which relays snapshot refreshes and heartbeat/freshness state. This is **snapshot mode**, not Upstox's streaming Market Data Feed V3. The official V3 feed requires a bearer-authenticated WebSocket, follows a redirect, and uses binary Protobuf messages. Implementing that upstream feed safely requires confirming the exact account entitlement and testing its current Protobuf schema with your token. No feed scope is assumed here.
 - The Futures tab resolves current-month index contracts through Upstox Instrument Search and displays returned futures quotes, spot basis, and OI change when Upstox supplies the fields. OI Analytics loads the current option chain, computes PCR/OI totals, and charts call/put OI change by strike when Upstox provides previous OI; the chart can show strikes around ATM or the full returned chain. Overview shows the live snapshot and session OHLC. The Technicals and Strategy Lab views request daily candles for EMA 20/50, RSI 14, MACD histogram, and Supertrend (10, 3). The option chain defaults to the five strikes on either side of ATM and can be expanded to all returned strikes. A Light/Dark selector remembers the choice in this browser.
 - The Overview chart displays verified Upstox candles at selectable 1/3/5/10/15/30-minute, 1/2/3/4-hour, daily, weekly, monthly, and yearly intervals. The yearly interval aggregates monthly OHLCV data. Horizontal and vertical scroll controls complement the chart's built-in zoom and drag controls. EMA 50/100/200, RSI 14, session-reset VWAP, and Supertrend overlays are available. When Upstox supplies no index volume, VWAP displays an equal-weight candle-price proxy and identifies it as such. Supertrend period and multiplier are configurable. The index, timeframe, overlays, and Supertrend settings save in this browser and restore on return; this does not sync across browsers or devices. The chart supports fullscreen, but uses Upstox candle data rather than TradingView market data.
+- Swing Trade scans NSE single-stock F&O underlyings matched to NSE equities, then filters for a ₹200–₹5,000 latest close and at least 1,000,000 daily volume. It applies the notebook's daily continuation/reversal rules and requires hourly EMA/RSI confirmation plus aligned Supertrend 7,2 and 10,3 on the latest completed hourly candle. Historical requests are serialized and paced, 429 responses honor `Retry-After` or use bounded backoff, and hourly candles use quarter-sized chunks. The rate-limit protection can make a full-universe scan take several minutes. The indicator-alignment score is a heuristic, not a probability. The scan does not fetch options or calculate spread legs; those workbook tabs are intentionally cleared. Results are exported into the supplied workbook template from `backend/app/templates/` and are available for download for 30 minutes after a scan.
 
 ## Local run
 
@@ -62,6 +63,8 @@ The repository is public, but dashboard API routes are password-protected. Confi
 - `GET /api/option-chain/{symbol}?expiry=current_month` fetches the current-month option chain by default.
 - `GET /api/futures` resolves current-month index futures and fetches their quotes.
 - `GET /api/candles/{symbol}?timeframe=daily` returns verified daily candles for technical analysis.
+- `POST /api/swing-trade/scan` runs the authenticated NSE F&O directional scan and prepares a workbook export.
+- `GET /api/swing-trade/export/{scan_id}` downloads that scan's workbook; it requires the dashboard password and expires after 30 minutes.
 - `WS /ws` is authenticated by a password in the first WebSocket frame (browser WebSockets do not support custom authorization headers). Use HTTPS/WSS in deployment. The REST API uses `X-Dashboard-Password`.
 - The backend redacts bearer tokens and password values from errors/logging. Do not enable request header/body logging at the proxy.
 

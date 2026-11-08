@@ -5,6 +5,7 @@ import {
   createChart,
   LineStyle,
   LineSeries,
+  TickMarkType,
   type IChartApi,
   type ISeriesApi,
   type LineData,
@@ -54,6 +55,42 @@ type OverlayData = {
   vwap: LineData<Time>[]
   supertrendUp: Array<LineData<Time> | WhitespaceData<Time>>
   supertrendDown: Array<LineData<Time> | WhitespaceData<Time>>
+}
+
+function chartTimeToDate(time: Time): Date {
+  if (typeof time === 'number') return new Date(time * 1000)
+  if (typeof time === 'string') return new Date(`${time}T00:00:00Z`)
+  return new Date(Date.UTC(time.year, time.month - 1, time.day))
+}
+
+function formatTimeMark(time: Time, tickMarkType: TickMarkType): string {
+  const date = chartTimeToDate(time)
+  if (tickMarkType === TickMarkType.Time || tickMarkType === TickMarkType.TimeWithSeconds) {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(date)
+  }
+  if (tickMarkType === TickMarkType.DayOfMonth) {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+    }).format(date)
+  }
+  if (tickMarkType === TickMarkType.Month) {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      month: 'short',
+      year: '2-digit',
+    }).format(date)
+  }
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+  }).format(date)
 }
 
 function calculateRsi(bars: Bar[], period = 14): Array<number | null> {
@@ -283,7 +320,19 @@ export default function MarketChart({ candles, symbol, label, indicators, onIndi
         horzLines: { color: isLight ? '#edf1f4' : '#1c242c' },
       },
       rightPriceScale: { borderColor: isLight ? '#d8e0e6' : '#29313a' },
-      timeScale: { borderColor: isLight ? '#d8e0e6' : '#29313a', timeVisible: true, secondsVisible: false },
+      localization: {
+        timeFormatter: (time: Time) => `${new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Kolkata',
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(chartTimeToDate(time))} IST`,
+      },
+      timeScale: {
+        borderColor: isLight ? '#d8e0e6' : '#29313a',
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => formatTimeMark(time, tickMarkType),
+      },
       crosshair: { vertLine: { color: isLight ? '#8798a5' : '#62717d' }, horzLine: { color: isLight ? '#8798a5' : '#62717d' } },
       handleScroll: true,
       handleScale: true,

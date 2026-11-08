@@ -1,5 +1,6 @@
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import httpx
@@ -20,6 +21,9 @@ BANK_STOCKS = {
     "HDFCBANK": {"label": "HDFC Bank", "instrument_key": "NSE_EQ|INE040A01034"},
     "KOTAKBANK": {"label": "Kotak Mahindra", "instrument_key": "NSE_EQ|INE237A01036"},
 }
+IST = ZoneInfo("Asia/Kolkata")
+
+
 class UpstoxError(Exception):
     pass
 
@@ -66,7 +70,7 @@ class UpstoxClient:
         return await self.get("/v3/market-quote/ohlc", {"instrument_key": ",".join(keys), "interval": "1d"})
 
     async def candles(self, key: str, timeframe: str) -> list[list[Any]]:
-        end = date.today()
+        end = datetime.now(IST).date()
         history_start = date(2000, 1, 1)
         if timeframe in {"1m", "3m", "5m", "10m", "15m", "intraday"}:
             unit, interval = "minutes", "15" if timeframe == "intraday" else timeframe[:-1]
@@ -97,7 +101,14 @@ class UpstoxClient:
         )
         candles = data.get("candles", []) if isinstance(data, dict) else []
         if not isinstance(candles, list):
-            return []
+            candles = []
+        if unit in {"minutes", "hours"}:
+            intraday_data = await self.get(f"/v3/historical-candle/intraday/{key}/{unit}/{interval}", {})
+            intraday_candles = intraday_data.get("candles", []) if isinstance(intraday_data, dict) else []
+            if isinstance(intraday_candles, list):
+                by_timestamp = {candle[0]: candle for candle in candles}
+                by_timestamp.update({candle[0]: candle for candle in intraday_candles})
+                candles = [by_timestamp[timestamp] for timestamp in sorted(by_timestamp)]
         if timeframe != "1y":
             return candles
 

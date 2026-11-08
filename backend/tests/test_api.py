@@ -1,5 +1,6 @@
 import asyncio
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import HTTPException
@@ -40,23 +41,41 @@ def test_unknown_option_symbol_is_rejected():
     assert result.value.status_code == 404
 
 
-def test_intraday_candles_use_historical_15_minute_data(monkeypatch):
-    captured = {}
+def test_intraday_candles_merge_historical_and_current_session_data(monkeypatch):
+    captured = []
 
     async def get(self, path, params):
-        captured["path"] = path
-        captured["params"] = params
+        captured.append((path, params))
         return {"candles": []}
 
     monkeypatch.setattr(UpstoxClient, "get", get)
 
     result = asyncio.run(UpstoxClient("test-access-token").candles("NSE_INDEX|Nifty 50", "intraday"))
 
-    end = date.today()
+    end = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     start = end - timedelta(days=29)
     assert result == []
-    assert captured["path"] == f"/v3/historical-candle/NSE_INDEX|Nifty 50/minutes/15/{end.isoformat()}/{start.isoformat()}"
-    assert captured["params"] == {}
+    assert captured == [
+        (f"/v3/historical-candle/NSE_INDEX|Nifty 50/minutes/15/{end.isoformat()}/{start.isoformat()}", {}),
+        ("/v3/historical-candle/intraday/NSE_INDEX|Nifty 50/minutes/15", {}),
+    ]
+
+
+def test_intraday_candles_prefer_current_session_bar_for_duplicate_timestamp(monkeypatch):
+    historical = ["2026-11-08T14:15:00+05:30", 100, 105, 99, 101, 10, 0]
+    current = ["2026-11-08T14:15:00+05:30", 100, 108, 99, 107, 20, 0]
+    previous = ["2026-11-06T15:15:00+05:30", 90, 95, 89, 94, 15, 0]
+
+    async def get(self, path, params):
+        if "/intraday/" in path:
+            return {"candles": [current]}
+        return {"candles": [historical, previous]}
+
+    monkeypatch.setattr(UpstoxClient, "get", get)
+
+    result = asyncio.run(UpstoxClient("test-access-token").candles("NSE_INDEX|Nifty Bank", "15m"))
+
+    assert result == [previous, current]
 
 
 def test_legacy_daily_candles_keep_existing_history_window(monkeypatch):
@@ -70,7 +89,7 @@ def test_legacy_daily_candles_keep_existing_history_window(monkeypatch):
 
     asyncio.run(UpstoxClient("test-access-token").candles("NSE_INDEX|Nifty 50", "daily"))
 
-    end = date.today()
+    end = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     start = end - timedelta(days=240)
     assert captured["path"] == f"/v3/historical-candle/NSE_INDEX|Nifty 50/days/1/{end.isoformat()}/{start.isoformat()}"
 
@@ -94,10 +113,10 @@ def test_legacy_daily_candles_keep_existing_history_window(monkeypatch):
     ],
 )
 def test_candles_use_selected_historical_interval(monkeypatch, timeframe, unit, interval):
-    captured = {}
+    captured = []
 
     async def get(self, path, params):
-        captured["path"] = path
+        captured.append(path)
         return {"candles": []}
 
     monkeypatch.setattr(UpstoxClient, "get", get)
@@ -105,7 +124,9 @@ def test_candles_use_selected_historical_interval(monkeypatch, timeframe, unit, 
     result = asyncio.run(UpstoxClient("test-access-token").candles("NSE_INDEX|Nifty 50", timeframe))
 
     assert result == []
-    assert f"/{unit}/{interval}/" in captured["path"]
+    assert any(f"/{unit}/{interval}/" in path and "/intraday/" not in path for path in captured)
+    if unit in {"minutes", "hours"}:
+        assert f"/v3/historical-candle/intraday/NSE_INDEX|Nifty 50/{unit}/{interval}" in captured
 
 
 def test_yearly_candles_aggregate_monthly_history(monkeypatch):

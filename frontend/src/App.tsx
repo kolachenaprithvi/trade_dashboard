@@ -9,10 +9,13 @@ type Dashboard = { mode: string; status: string; asOf: string | null; indices: R
 type FutureRow = { symbol: string; tradingSymbol?: string; expiry?: string; lastPrice?: number | null; change?: number | null; oi?: number | null; previousOi?: number | null }
 type Candle = MarketCandle
 type ChainRow = { strike_price?: number; call_options?: { market_data?: { ltp?: number; oi?: number; prev_oi?: number; volume?: number; bid_price?: number; ask_price?: number }; option_greeks?: { delta?: number; iv?: number } }; put_options?: { market_data?: { ltp?: number; oi?: number; prev_oi?: number; volume?: number; bid_price?: number; ask_price?: number }; option_greeks?: { delta?: number; iv?: number } } }
+type OiMover = { strike: number; side: 'CALL' | 'PUT'; change: number }
 const API = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const symbols = [{ id: 'NIFTY', label: 'NIFTY 50', short: 'NIFTY' }, { id: 'BANKNIFTY', label: 'BANK NIFTY', short: 'BANKNIFTY' }, { id: 'INDIA_VIX', label: 'INDIA VIX', short: 'VIX' }]
 const modules = ['Overview', 'Futures', 'Option Chain', 'OI Analytics', 'Technicals', 'Strategy Lab']
 const chartSettingsKey = 'tradely-chart-settings'
+const dataFontSizeKey = 'tradely-data-font-size'
+const defaultDataFontSize = 24
 const defaultChartIndicators: ChartIndicators = { ema50: true, ema100: true, ema200: true, rsi: true, vwap: true, supertrend: true }
 const defaultSupertrend: SupertrendSettings = { period: 10, multiplier: 3 }
 const specialNseSessionDates = new Set(['2026-11-08'])
@@ -43,7 +46,7 @@ const isNseMarketHours = () => {
 }
 
 function readChartSettings(): { symbol: string; indicators: ChartIndicators; timeframe: ChartTimeframe; supertrend: SupertrendSettings } {
-  const defaults = { symbol: 'NIFTY', indicators: defaultChartIndicators, timeframe: '15m' as ChartTimeframe, supertrend: defaultSupertrend }
+  const defaults = { symbol: 'BANKNIFTY', indicators: defaultChartIndicators, timeframe: '15m' as ChartTimeframe, supertrend: defaultSupertrend }
   try {
     const stored = localStorage.getItem(chartSettingsKey)
     if (!stored) return defaults
@@ -86,12 +89,24 @@ function readChartSettings(): { symbol: string; indicators: ChartIndicators; tim
   }
 }
 
+function readDataFontSize() {
+  try {
+    const saved = Number(localStorage.getItem(dataFontSizeKey))
+    return Number.isFinite(saved) && saved >= 18 && saved <= 36 ? saved : defaultDataFontSize
+  } catch (error) {
+    console.warn('Unable to read the saved data font size from this browser.', error)
+    return defaultDataFontSize
+  }
+}
+
 function App() {
   const [password, setPassword] = useState(() => sessionStorage.getItem('tradely-password') || '')
   const [passwordDraft, setPasswordDraft] = useState('')
   const [showAccess, setShowAccess] = useState(!sessionStorage.getItem('tradely-password'))
   const [data, setData] = useState<Dashboard>(empty)
   const [chartSettings, setChartSettings] = useState(readChartSettings)
+  const [dataFontSize, setDataFontSize] = useState(readDataFontSize)
+  const [dataFontSaveError, setDataFontSaveError] = useState('')
   const selected = chartSettings.symbol
   const [module, setModule] = useState('Overview')
   const [screen, setScreen] = useState<'terminal' | 'swing-trade'>('terminal')
@@ -112,6 +127,7 @@ function App() {
   const [expiry, setExpiry] = useState('current_month')
   const [chainLoading, setChainLoading] = useState(false)
   const [chainError, setChainError] = useState('')
+  const [chainRefreshKey, setChainRefreshKey] = useState(0)
   const [lastMessage, setLastMessage] = useState<number | null>(null)
   const [, setClockTick] = useState(Date.now())
   const [socketState, setSocketState] = useState('connecting')
@@ -124,6 +140,17 @@ function App() {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('tradely-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--market-data-size', `${dataFontSize}px`)
+    try {
+      localStorage.setItem(dataFontSizeKey, String(dataFontSize))
+      setDataFontSaveError('')
+    } catch (error) {
+      console.error('Unable to save the data font size in this browser.', error)
+      setDataFontSaveError('Font size could not be saved in this browser.')
+    }
+  }, [dataFontSize])
 
   useEffect(() => {
     try {
@@ -180,7 +207,12 @@ function App() {
   }, [password, reconnectKey, loadDashboard])
 
   useEffect(() => {
-    if (!['Option Chain', 'OI Analytics', 'Strategy Lab'].includes(module) || selected === 'INDIA_VIX' || !password) { setChain([]); return }
+    if (screen !== 'terminal' || !['Overview', 'Option Chain', 'OI Analytics', 'Strategy Lab'].includes(module) || selected === 'INDIA_VIX' || !password) {
+      setChain([])
+      setChainLoading(false)
+      setChainError('')
+      return
+    }
     let live = true
     setChainLoading(true); setChainError('')
     fetch(`${API}/api/option-chain/${selected}?expiry=${expiry}`, { headers: { 'X-Dashboard-Password': password } })
@@ -189,7 +221,7 @@ function App() {
       .catch(e => { if (live) { setChain([]); setChainError(e.message) } })
       .finally(() => { if (live) setChainLoading(false) })
     return () => { live = false }
-  }, [module, selected, expiry, password])
+  }, [screen, module, selected, expiry, password, chainRefreshKey])
 
   useEffect(() => {
     if (!['Technicals', 'Strategy Lab'].includes(module) || !password || selected === 'INDIA_VIX') { setCandles([]); return }
@@ -243,6 +275,14 @@ function App() {
   }, [screen, module, password])
 
   useEffect(() => {
+    if (screen !== 'terminal' || module !== 'Overview' || !password) return
+    const timer = window.setInterval(() => {
+      if (isNseMarketHours()) setChainRefreshKey(key => key + 1)
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [screen, module, password])
+
+  useEffect(() => {
     if (module !== 'Futures' || !password) return
     let live = true
     setFuturesLoading(true); setFuturesError('')
@@ -254,6 +294,16 @@ function App() {
     return () => { live = false }
   }, [module, password])
   const chainStats = useMemo(() => chain.reduce((acc, row) => { const call = row.call_options?.market_data, put = row.put_options?.market_data; acc.call += call?.oi || 0; acc.put += put?.oi || 0; if (call?.oi != null && call.prev_oi != null) { acc.callChange += call.oi - call.prev_oi; acc.callChangeCount += 1 } if (put?.oi != null && put.prev_oi != null) { acc.putChange += put.oi - put.prev_oi; acc.putChangeCount += 1 } return acc }, { call: 0, put: 0, callChange: 0, putChange: 0, callChangeCount: 0, putChangeCount: 0 }), [chain])
+  const oiMovers = useMemo(() => chain.flatMap(row => {
+    const strike = row.strike_price
+    if (strike == null || !Number.isFinite(strike)) return []
+    return (['CALL', 'PUT'] as const).flatMap(side => {
+      const marketData = side === 'CALL' ? row.call_options?.market_data : row.put_options?.market_data
+      if (marketData?.oi == null || marketData.prev_oi == null || !Number.isFinite(marketData.oi) || !Number.isFinite(marketData.prev_oi)) return []
+      const change = marketData.oi - marketData.prev_oi
+      return change === 0 ? [] : [{ strike, side, change }]
+    })
+  }).sort((a, b) => Math.abs(b.change) - Math.abs(a.change) || a.strike - b.strike || Number(a.side === 'PUT') - Number(b.side === 'PUT')).slice(0, 5), [chain])
   const pcr = chainStats.call ? chainStats.put / chainStats.call : null
   const indicators = useMemo(() => calculateIndicators(candles), [candles])
   const selectSymbol = (id: string) => setChartSettings(current => ({ ...current, symbol: id }))
@@ -268,13 +318,24 @@ function App() {
     <main className="main-area">
       <header className="topbar"><div className="crumb"><span className="crumb-muted">WORKSPACE</span><span className="slash">/</span><strong>{screen === 'swing-trade' ? 'SWING TRADE' : 'INDEX TERMINAL'}</strong><span className="private-badge"><LockKeyhole size={11}/> PRIVATE</span></div><div className="top-actions"><div className="market-clock"><span className="clock-dot"/> NSE <span>•</span> {new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())} IST</div><button className="icon-btn" title="Search"><Search size={16}/></button><button className="icon-btn" title="Notifications"><Bell size={16}/><i/></button><button className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>{theme === 'dark' ? <Sun size={14}/> : <Moon size={14}/>}<span>{theme === 'dark' ? 'Light' : 'Dark'}</span></button><button className="profile" onClick={lock} title="Lock dashboard">S</button></div></header>
       {screen === 'swing-trade' ? <SwingTrade apiBaseUrl={API} password={password} onUnauthorized={() => setShowAccess(true)} /> : <>
-      <section className="heading-row"><div><div className="eyebrow"><span className="eyebrow-line"/> MARKET INTELLIGENCE <span className="eyebrow-date">{new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date()).toUpperCase()}</span></div><h1>Index Terminal</h1><p className="subtitle">A focused view of the Indian index derivatives market.</p></div><div className="heading-controls"><button className="session-pill"><span className="session-dot"/> {status === 'connected' ? 'Market session' : 'Session monitor'} <ChevronDown size={14}/></button><button className="refresh-btn" onClick={() => { void loadDashboard(); setReconnectKey(k => k + 1) }}><RefreshCw size={14}/> Refresh</button></div></section>
+      <section className="heading-row"><div><div className="eyebrow"><span className="eyebrow-line"/> MARKET INTELLIGENCE <span className="eyebrow-date">{new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date()).toUpperCase()}</span></div><h1>Index Terminal</h1><p className="subtitle">A focused view of the Indian index derivatives market.</p></div><div className="heading-controls"><label className="data-font-control" htmlFor="data-font-size"><span>DATA SIZE</span><input id="data-font-size" type="range" min="18" max="36" step="2" value={dataFontSize} onChange={event => setDataFontSize(Number(event.target.value))} aria-describedby={dataFontSaveError ? 'data-font-save-error' : undefined}/><output htmlFor="data-font-size">{dataFontSize}px</output>{dataFontSaveError && <span className="data-font-error" id="data-font-save-error" role="status">{dataFontSaveError}</span>}</label><button className="session-pill"><span className="session-dot"/> {status === 'connected' ? 'Market session' : 'Session monitor'} <ChevronDown size={14}/></button><button className="refresh-btn" onClick={() => { void loadDashboard(); setReconnectKey(k => k + 1); setChainRefreshKey(key => key + 1) }}><RefreshCw size={14}/> Refresh</button></div></section>
       <div className={`connection-banner ${status === 'connected' ? 'good' : status === 'stale' ? 'warn' : ''}`}><div className="conn-left"><span className="conn-icon">{status === 'connected' ? <Wifi size={14}/> : status === 'stale' ? <Clock3 size={14}/> : <WifiOff size={14}/>}</span><div><strong>{status === 'connected' ? 'Snapshot link established' : status === 'stale' ? 'Data is stale' : status === 'token_missing' ? 'Waiting for data configuration' : status === 'upstream_error' ? 'Upstream unavailable' : 'Connecting to data gateway'}</strong><span>{data.message || 'Authenticated API snapshots · No streaming feed entitlement assumed'}</span></div></div><div className="conn-right"><span className="conn-status"><i className={socketState === 'connected' ? 'green' : ''}/>{socketState === 'connected' ? 'SOCKET ONLINE' : 'RECONNECTING'}</span><span className="divider"/><span className="freshness">UPDATED {ago(data.asOf)}</span></div></div>
       <section className="index-strip">{symbols.map(s => { const q = data.indices[s.id], up = (q?.change || 0) >= 0; return <button onClick={() => selectSymbol(s.id)} className={`index-card ${selected === s.id ? 'selected' : ''}`} key={s.id}><div className="index-top"><span>{s.label}</span><span className={`mini-change ${q ? (up ? 'positive' : 'negative') : ''}`}>{q ? <>{up ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>} {fmt(Math.abs(q.change || 0), 2)}</> : <span className="awaiting">—</span>}</span></div><div className="index-bottom"><strong>{fmt(q?.lastPrice)}</strong><span className="sparkline">{q ? 'SNAPSHOT' : 'NO DATA'}</span></div></button> })}</section>
-      <section className="bank-box panel"><div className="bank-box-head"><div><span className="eyebrow-small">BANK NIFTY CONSTITUENTS</span><h2>Top banking stocks</h2></div><span className="bank-box-note">Live quotes · no index weights implied</span></div><div className="bank-stock-grid">{Object.entries(data.bankStocks || {}).map(([id, stock]) => <div className="bank-stock" key={id}><div><strong>{stock.label}</strong><span>{id}</span></div><b>{fmt(stock.lastPrice)}</b><em className={(stock.change || 0) >= 0 ? 'up' : 'down'}>{stock.change == null ? '—' : `${stock.change >= 0 ? '+' : '−'}${fmt(Math.abs(stock.change))}`}</em></div>)}{!Object.keys(data.bankStocks || {}).length && <div className="bank-empty">Bank constituent quotes will appear when Upstox returns them.</div>}</div></section>      <nav className="module-tabs">{modules.map(m => <button className={module === m ? 'current' : ''} key={m} onClick={() => setModule(m)}>{m}{m === 'Option Chain' && <span className="tab-count">{chain.length || '—'}</span>}</button>)}</nav>
+      <section className="bank-box panel"><div className="bank-box-head"><div><span className="eyebrow-small">BANK NIFTY CONSTITUENTS</span><h2>Top banking stocks</h2></div><span className="bank-box-note">Live quotes · no index weights implied</span></div><div className="bank-stock-grid">{Object.entries(data.bankStocks || {}).map(([id, stock]) => <div className="bank-stock" key={id}><div><strong>{stock.label}</strong><span>{id}</span></div><b>{fmt(stock.lastPrice)}</b><em className={(stock.change || 0) >= 0 ? 'up' : 'down'}>{stock.change == null ? '—' : `${stock.change >= 0 ? '+' : '−'}${fmt(Math.abs(stock.change))}`}</em></div>)}{!Object.keys(data.bankStocks || {}).length && <div className="bank-empty">Bank constituent quotes will appear when Upstox returns them.</div>}</div></section>
+      <section className="overview-lower dashboard-market-metrics" aria-label="Market session metrics">
+        <div className="panel metric-panel">
+          <div className="panel-title-row"><h3>Session snapshot · {symbols.find(symbol => symbol.id === selected)?.label || selected}</h3><span className="unavailable-pill">{quote ? 'UPSTOX DATA' : 'NO DATA'}</span></div>
+          <div className="snapshot-metrics"><div><span>OPEN</span><strong>{fmt(quote?.ohlc?.open)}</strong></div><div><span>HIGH</span><strong>{fmt(quote?.ohlc?.high)}</strong></div><div><span>LOW</span><strong>{fmt(quote?.ohlc?.low)}</strong></div><div><span>CHANGE</span><strong className={(quote?.change || 0) >= 0 ? 'up' : 'down'}>{quote?.change == null ? '—' : `${quote.change >= 0 ? '+' : '−'}${fmt(Math.abs(quote.change))}`}</strong></div></div>
+        </div>
+        <div className="panel metric-panel">
+          <div className="panel-title-row"><h3>India VIX</h3><span className="unavailable-pill">{data.indices.INDIA_VIX ? 'SNAPSHOT' : 'NO DATA'}</span></div>
+          <div className="vix-summary"><strong>{fmt(data.indices.INDIA_VIX?.lastPrice)}</strong><span className={data.indices.INDIA_VIX?.change == null ? '' : data.indices.INDIA_VIX.change >= 0 ? 'up' : 'down'}>{data.indices.INDIA_VIX?.change == null ? 'Waiting for India VIX snapshot' : `${data.indices.INDIA_VIX.change >= 0 ? '+' : '−'}${fmt(Math.abs(data.indices.INDIA_VIX.change))} today`}</span></div>
+        </div>
+      </section>
+      <nav className="module-tabs">{modules.map(m => <button className={module === m ? 'current' : ''} key={m} onClick={() => setModule(m)}>{m}{m === 'Option Chain' && <span className="tab-count">{chain.length || '—'}</span>}</button>)}</nav>
       <section className="content-grid">
         <div className="primary-column">
-          {module === 'Option Chain' ? <OptionPanel selected={selected} chain={chain} loading={chainLoading} error={chainError} expiry={expiry} setExpiry={setExpiry} pcr={pcr} spot={quote?.lastPrice} showAll={showAllStrikes} setShowAll={setShowAllStrikes}/> : module === 'Futures' ? <FuturesPanel rows={futures} loading={futuresLoading} error={futuresError} spots={data.indices}/> : module === 'OI Analytics' ? <AnalyticsPanel chain={chain} spot={quote?.lastPrice} loading={chainLoading} error={chainError} callOi={chainStats.call} putOi={chainStats.put} pcr={pcr} callOiChange={chainStats.callChange} putOiChange={chainStats.putChange} callOiChangeCount={chainStats.callChangeCount} putOiChangeCount={chainStats.putChangeCount}/> : module === 'Technicals' ? <TechnicalsPanel quote={quote} data={data} indicators={indicators} candles={candles} loading={candlesLoading} error={candlesError}/> : module === 'Strategy Lab' ? <StrategyPanel quote={quote} candles={candles} indicators={indicators} candlesLoading={candlesLoading} candlesError={candlesError} chain={chain} chainLoading={chainLoading} chainError={chainError} selected={selected}/> : <OverviewPanel quote={quote} selected={selected} vix={data.indices.INDIA_VIX} candles={chartCandles} loading={chartLoading} error={chartError} onRefresh={() => setChartRefreshKey(key => key + 1)} indicators={chartSettings.indicators} onIndicatorsChange={updateChartIndicators} timeframe={chartSettings.timeframe} onTimeframeChange={updateChartTimeframe} supertrend={chartSettings.supertrend} onSupertrendChange={updateSupertrend} theme={theme} saveError={chartSaveError}/>}
+          {module === 'Option Chain' ? <OptionPanel selected={selected} chain={chain} loading={chainLoading} error={chainError} expiry={expiry} setExpiry={setExpiry} pcr={pcr} spot={quote?.lastPrice} showAll={showAllStrikes} setShowAll={setShowAllStrikes}/> : module === 'Futures' ? <FuturesPanel rows={futures} loading={futuresLoading} error={futuresError} spots={data.indices}/> : module === 'OI Analytics' ? <AnalyticsPanel chain={chain} spot={quote?.lastPrice} loading={chainLoading} error={chainError} callOi={chainStats.call} putOi={chainStats.put} pcr={pcr} callOiChange={chainStats.callChange} putOiChange={chainStats.putChange} callOiChangeCount={chainStats.callChangeCount} putOiChangeCount={chainStats.putChangeCount}/> : module === 'Technicals' ? <TechnicalsPanel quote={quote} data={data} indicators={indicators} candles={candles} loading={candlesLoading} error={candlesError}/> : module === 'Strategy Lab' ? <StrategyPanel quote={quote} candles={candles} indicators={indicators} candlesLoading={candlesLoading} candlesError={candlesError} chain={chain} chainLoading={chainLoading} chainError={chainError} selected={selected}/> : <OverviewPanel selected={selected} expiry={expiry} candles={chartCandles} loading={chartLoading} error={chartError} onRefresh={() => setChartRefreshKey(key => key + 1)} indicators={chartSettings.indicators} onIndicatorsChange={updateChartIndicators} timeframe={chartSettings.timeframe} onTimeframeChange={updateChartTimeframe} supertrend={chartSettings.supertrend} onSupertrendChange={updateSupertrend} theme={theme} saveError={chartSaveError} oiMovers={oiMovers} oiLoading={chainLoading} oiError={chainError}/>}
         </div>
         <aside className="side-column"><div className="panel focus-card"><div className="panel-head"><div><span className="eyebrow-small">SELECTED INSTRUMENT</span><h3>{symbols.find(s => s.id === selected)?.label}</h3></div><button className="dots">•••</button></div><div className="focus-price">{fmt(quote?.lastPrice)}<span className={!quote ? 'muted' : (quote.change || 0) >= 0 ? 'up' : 'down'}>{quote ? `${(quote.change || 0) >= 0 ? '+' : '−'}${fmt(Math.abs(quote.change || 0))}` : 'Live quote unavailable'}</span></div><div className="focus-meta"><span><i/> {quote ? 'Snapshot received' : 'No live snapshot'}</span><span>{ago(quote?.timestamp || data.asOf)}</span></div><div className="focus-chart"><div className="chart-empty"><Activity size={18}/><span>{quote ? "Intraday chart needs candle history" : "No verified price history"}</span></div></div><div className="chart-axis"><span>SESSION OPEN</span><span>SNAPSHOT VIEW</span><span>NOW</span></div></div>
           <div className="panel quick-stats"><div className="panel-title-row"><h3>Session snapshot</h3><span className="tiny-live"><i/> DATA</span></div><div className="stat-row"><span>Open</span><strong>{fmt(quote?.ohlc?.open)}</strong></div><div className="stat-row"><span>High</span><strong>{fmt(quote?.ohlc?.high)}</strong></div><div className="stat-row"><span>Low</span><strong>{fmt(quote?.ohlc?.low)}</strong></div><div className="stat-row"><span>Volume</span><strong>{quote?.volume == null ? '—' : quote.volume.toLocaleString('en-IN')}</strong></div><div className="stat-row"><span>Open interest</span><strong>{quote?.oi == null ? '—' : quote.oi.toLocaleString('en-IN')}</strong></div></div>
@@ -288,10 +349,9 @@ function App() {
   </div>
 }
 
-function OverviewPanel({ quote, selected, vix, candles, loading, error, onRefresh, indicators, onIndicatorsChange, timeframe, onTimeframeChange, supertrend, onSupertrendChange, theme, saveError }: {
-  quote?: Quote
+function OverviewPanel({ selected, expiry, candles, loading, error, onRefresh, indicators, onIndicatorsChange, timeframe, onTimeframeChange, supertrend, onSupertrendChange, theme, saveError, oiMovers, oiLoading, oiError }: {
   selected: string
-  vix?: Quote
+  expiry: string
   candles: Candle[]
   loading: boolean
   error: string
@@ -304,10 +364,33 @@ function OverviewPanel({ quote, selected, vix, candles, loading, error, onRefres
   onSupertrendChange: (settings: SupertrendSettings) => void
   theme: 'dark' | 'light'
   saveError: string
+  oiMovers: OiMover[]
+  oiLoading: boolean
+  oiError: string
 }) {
-  const o = quote?.ohlc
   const label = symbols.find(symbol => symbol.id === selected)?.label || selected
   return <>
+    <section className="panel oi-movers-panel" aria-live="polite">
+      <div className="oi-movers-heading">
+        <div><span className="eyebrow-small">OPTIONS POSITIONING</span><h2>Top 5 OI change</h2><p>{label} · {expiry.replace(/_/g, ' ')} · ranked by largest absolute change</p></div>
+        <span className={`unavailable-pill ${oiLoading ? 'oi-loading-pill' : ''}`}>{oiLoading ? 'UPDATING' : oiError ? 'UNAVAILABLE' : oiMovers.length ? 'SNAPSHOT' : 'NO CHANGE'}</span>
+      </div>
+      {oiError
+        ? <div className="oi-movers-empty">{oiError}</div>
+        : selected === 'INDIA_VIX'
+          ? <div className="oi-movers-empty">Option-chain OI changes are available for NIFTY and BANK NIFTY, not India VIX.</div>
+          : oiLoading && !oiMovers.length
+            ? <div className="oi-movers-empty">Loading option-chain open interest…</div>
+            : oiMovers.length
+              ? <div className="oi-movers-list">{oiMovers.map((mover, index) => <div className="oi-mover-row" key={`${mover.side}-${mover.strike}`}>
+                <span className="oi-mover-rank">{String(index + 1).padStart(2, '0')}</span>
+                <span className={`oi-mover-side ${mover.change > 0 ? 'up' : 'down'}`}>{mover.side}</span>
+                <strong className="oi-mover-contract">{mover.strike.toLocaleString('en-IN')} {mover.side === 'CALL' ? 'CE' : 'PE'}</strong>
+                <span className={`oi-mover-change ${mover.change > 0 ? 'up' : 'down'}`}>{mover.change > 0 ? '+' : '−'}{Math.abs(mover.change).toLocaleString('en-IN')}</span>
+              </div>)}</div>
+              : <div className="oi-movers-empty">No non-zero OI changes with previous OI are available in this option-chain snapshot.</div>}
+      <p className="oi-movers-note">Change = current OI − previous OI. Green indicates OI increased; red indicates OI decreased. Refreshes every minute during NSE market hours.</p>
+    </section>
     <div className="panel overview-card">
       <div className="panel-heading">
         <div><span className="eyebrow-small">MARKET OVERVIEW</span><h2>Market chart</h2><p>Upstox historical and current-session candles for {label}; choose the candle interval below. Time labels use IST. Auto-refreshes every minute during regular and scheduled special sessions.</p></div>
@@ -315,16 +398,6 @@ function OverviewPanel({ quote, selected, vix, candles, loading, error, onRefres
       </div>
       <MarketChart candles={candles} symbol={selected} label={label} indicators={indicators} onIndicatorsChange={onIndicatorsChange} timeframe={timeframe} onTimeframeChange={onTimeframeChange} supertrend={supertrend} onSupertrendChange={onSupertrendChange} loading={loading} error={error} theme={theme} saveError={saveError}/>
       <div className="overview-legend"><span><i className="legend-line"/> VERIFIED UPSTOX CANDLES</span><span>Indicator settings save in this browser</span></div>
-    </div>
-    <div className="overview-lower">
-      <div className="panel metric-panel">
-        <div className="panel-title-row"><h3>Session snapshot</h3><span className="unavailable-pill">{quote ? 'UPSTOX DATA' : 'NO DATA'}</span></div>
-        <div className="snapshot-metrics"><div><span>OPEN</span><strong>{fmt(o?.open)}</strong></div><div><span>HIGH</span><strong>{fmt(o?.high)}</strong></div><div><span>LOW</span><strong>{fmt(o?.low)}</strong></div><div><span>CHANGE</span><strong className={(quote?.change || 0) >= 0 ? 'up' : 'down'}>{quote?.change == null ? '—' : `${quote.change >= 0 ? '+' : '−'}${fmt(Math.abs(quote.change))}`}</strong></div></div>
-      </div>
-      <div className="panel metric-panel">
-        <div className="panel-title-row"><h3>India VIX</h3><span className="unavailable-pill">{vix ? 'SNAPSHOT' : 'NO DATA'}</span></div>
-        <div className="vix-summary"><strong>{fmt(vix?.lastPrice)}</strong><span>{vix?.change == null ? 'Waiting for India VIX snapshot' : `${vix.change >= 0 ? '+' : '−'}${fmt(Math.abs(vix.change))} today`}</span></div>
-      </div>
     </div>
   </>
 }

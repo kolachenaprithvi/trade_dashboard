@@ -21,6 +21,7 @@ const defaultSupertrend: SupertrendSettings = { period: 10, multiplier: 3 }
 const specialNseSessionDates = new Set(['2026-11-08'])
 const empty = (): Dashboard => ({ mode: 'demo', status: 'connecting', asOf: null, indices: {}, bankStocks: {}, technicals: {}, message: 'Connecting to your private market data gateway…' })
 const fmt = (v?: number | null, digits = 2) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+const signedOi = (v?: number | null) => v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('en-IN')}`
 const ago = (iso?: string | null) => { if (!iso) return '—'; const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago` }
 const isNseMarketHours = () => {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -214,6 +215,7 @@ function App() {
       return
     }
     let live = true
+    setChain([])
     setChainLoading(true); setChainError('')
     fetch(`${API}/api/option-chain/${selected}?expiry=${expiry}`, { headers: { 'X-Dashboard-Password': password } })
       .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.detail || 'Could not load option chain'); return j })
@@ -304,6 +306,32 @@ function App() {
       return change === 0 ? [] : [{ strike, side, change }]
     })
   }).sort((a, b) => Math.abs(b.change) - Math.abs(a.change) || a.strike - b.strike || Number(a.side === 'PUT') - Number(b.side === 'PUT')).slice(0, 5), [chain])
+  const oiBands = useMemo(() => {
+    const spot = quote?.lastPrice
+    const strikes = chain.filter(row => typeof row.strike_price === 'number').sort((a, b) => (a.strike_price || 0) - (b.strike_price || 0))
+    if (spot == null || !strikes.length) return null
+    const atmIndex = strikes.reduce((best, row, index) => Math.abs((row.strike_price || 0) - spot) < Math.abs((strikes[best]?.strike_price || 0) - spot) ? index : best, 0)
+    const summarize = (radius: number) => {
+      const rows = strikes.slice(Math.max(0, atmIndex - radius), Math.min(strikes.length, atmIndex + radius + 1))
+      const totals = rows.reduce((acc, row) => {
+        const call = row.call_options?.market_data
+        const put = row.put_options?.market_data
+        if (call?.oi != null) { acc.callOi += call.oi; acc.callCount += 1 }
+        if (put?.oi != null) { acc.putOi += put.oi; acc.putCount += 1 }
+        if (call?.oi != null && call.prev_oi != null) { acc.callChange += call.oi - call.prev_oi; acc.callChangeCount += 1 }
+        if (put?.oi != null && put.prev_oi != null) { acc.putChange += put.oi - put.prev_oi; acc.putChangeCount += 1 }
+        return acc
+      }, { callOi: 0, putOi: 0, callCount: 0, putCount: 0, callChange: 0, putChange: 0, callChangeCount: 0, putChangeCount: 0 })
+      return {
+        callOi: totals.callCount ? totals.callOi : null,
+        putOi: totals.putCount ? totals.putOi : null,
+        callChange: totals.callChangeCount ? totals.callChange : null,
+        putChange: totals.putChangeCount ? totals.putChange : null,
+        pcr: totals.callCount && totals.putCount && totals.callOi > 0 ? totals.putOi / totals.callOi : null,
+      }
+    }
+    return { atm: strikes[atmIndex].strike_price, near: summarize(10), wide: summarize(20) }
+  }, [chain, quote?.lastPrice])
   const pcr = chainStats.call ? chainStats.put / chainStats.call : null
   const indicators = useMemo(() => calculateIndicators(candles), [candles])
   const selectSymbol = (id: string) => setChartSettings(current => ({ ...current, symbol: id }))
@@ -322,14 +350,18 @@ function App() {
       <div className={`connection-banner ${status === 'connected' ? 'good' : status === 'stale' ? 'warn' : ''}`}><div className="conn-left"><span className="conn-icon">{status === 'connected' ? <Wifi size={14}/> : status === 'stale' ? <Clock3 size={14}/> : <WifiOff size={14}/>}</span><div><strong>{status === 'connected' ? 'Snapshot link established' : status === 'stale' ? 'Data is stale' : status === 'token_missing' ? 'Waiting for data configuration' : status === 'upstream_error' ? 'Upstream unavailable' : 'Connecting to data gateway'}</strong><span>{data.message || 'Authenticated API snapshots · No streaming feed entitlement assumed'}</span></div></div><div className="conn-right"><span className="conn-status"><i className={socketState === 'connected' ? 'green' : ''}/>{socketState === 'connected' ? 'SOCKET ONLINE' : 'RECONNECTING'}</span><span className="divider"/><span className="freshness">UPDATED {ago(data.asOf)}</span></div></div>
       <section className="index-strip">{symbols.map(s => { const q = data.indices[s.id], up = (q?.change || 0) >= 0; return <button onClick={() => selectSymbol(s.id)} className={`index-card ${selected === s.id ? 'selected' : ''}`} key={s.id}><div className="index-top"><span>{s.label}</span><span className={`mini-change ${q ? (up ? 'positive' : 'negative') : ''}`}>{q ? <>{up ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>} {fmt(Math.abs(q.change || 0), 2)}</> : <span className="awaiting">—</span>}</span></div><div className="index-bottom"><strong>{fmt(q?.lastPrice)}</strong><span className="sparkline">{q ? 'SNAPSHOT' : 'NO DATA'}</span></div></button> })}</section>
       <section className="bank-box panel"><div className="bank-box-head"><div><span className="eyebrow-small">BANK NIFTY CONSTITUENTS</span><h2>Top banking stocks</h2></div><span className="bank-box-note">Live quotes · no index weights implied</span></div><div className="bank-stock-grid">{Object.entries(data.bankStocks || {}).map(([id, stock]) => <div className="bank-stock" key={id}><div><strong>{stock.label}</strong><span>{id}</span></div><b>{fmt(stock.lastPrice)}</b><em className={(stock.change || 0) >= 0 ? 'up' : 'down'}>{stock.change == null ? '—' : `${stock.change >= 0 ? '+' : '−'}${fmt(Math.abs(stock.change))}`}</em></div>)}{!Object.keys(data.bankStocks || {}).length && <div className="bank-empty">Bank constituent quotes will appear when Upstox returns them.</div>}</div></section>
-      <section className="overview-lower dashboard-market-metrics" aria-label="Market session metrics">
+      <section className="overview-lower dashboard-market-metrics" aria-label="Option open interest metrics">
         <div className="panel metric-panel">
-          <div className="panel-title-row"><h3>Session snapshot · {symbols.find(symbol => symbol.id === selected)?.label || selected}</h3><span className="unavailable-pill">{quote ? 'UPSTOX DATA' : 'NO DATA'}</span></div>
-          <div className="snapshot-metrics"><div><span>OPEN</span><strong>{fmt(quote?.ohlc?.open)}</strong></div><div><span>HIGH</span><strong>{fmt(quote?.ohlc?.high)}</strong></div><div><span>LOW</span><strong>{fmt(quote?.ohlc?.low)}</strong></div><div><span>CHANGE</span><strong className={(quote?.change || 0) >= 0 ? 'up' : 'down'}>{quote?.change == null ? '—' : `${quote.change >= 0 ? '+' : '−'}${fmt(Math.abs(quote.change))}`}</strong></div></div>
+          <div className="panel-title-row"><h3>Today's OI change · ±10 strikes</h3><span className="unavailable-pill">{chainLoading ? 'LOADING' : chainError ? 'API ERROR' : chain.length ? 'SNAPSHOT' : 'NO DATA'}</span></div>
+          <p className="oi-panel-caption">Calls and puts around ATM {oiBands?.atm == null ? '' : `(${fmt(oiBands.atm, 0)})`} · {symbols.find(symbol => symbol.id === selected)?.label || selected}</p>
+          {chainError && <div className="oi-inline-error">{chainError}</div>}
+          <div className="oi-summary-grid"><div><span>CALL OI CHANGE</span><strong className={oiBands?.near.callChange == null ? '' : oiBands.near.callChange >= 0 ? 'up' : 'down'}>{signedOi(oiBands?.near.callChange)}</strong></div><div><span>PUT OI CHANGE</span><strong className={oiBands?.near.putChange == null ? '' : oiBands.near.putChange >= 0 ? 'up' : 'down'}>{signedOi(oiBands?.near.putChange)}</strong></div></div>
         </div>
         <div className="panel metric-panel">
-          <div className="panel-title-row"><h3>India VIX</h3><span className="unavailable-pill">{data.indices.INDIA_VIX ? 'SNAPSHOT' : 'NO DATA'}</span></div>
-          <div className="vix-summary"><strong>{fmt(data.indices.INDIA_VIX?.lastPrice)}</strong><span className={data.indices.INDIA_VIX?.change == null ? '' : data.indices.INDIA_VIX.change >= 0 ? 'up' : 'down'}>{data.indices.INDIA_VIX?.change == null ? 'Waiting for India VIX snapshot' : `${data.indices.INDIA_VIX.change >= 0 ? '+' : '−'}${fmt(Math.abs(data.indices.INDIA_VIX.change))} today`}</span></div>
+          <div className="panel-title-row"><h3>Contract OI · ±20 strikes</h3><span className="unavailable-pill">{chainLoading ? 'LOADING' : chainError ? 'API ERROR' : chain.length ? 'SNAPSHOT' : 'NO DATA'}</span></div>
+          <p className="oi-panel-caption">Total OI around ATM {oiBands?.atm == null ? '' : `(${fmt(oiBands.atm, 0)})`} · {symbols.find(symbol => symbol.id === selected)?.label || selected}</p>
+          {chainError && <div className="oi-inline-error">{chainError}</div>}
+          <div className="oi-summary-grid oi-contract-grid"><div><span>TOTAL CALLS</span><strong>{fmt(oiBands?.wide.callOi, 0)}</strong></div><div><span>TOTAL PUTS</span><strong>{fmt(oiBands?.wide.putOi, 0)}</strong></div><div><span>PCR</span><strong>{fmt(oiBands?.wide.pcr)}</strong></div></div>
         </div>
       </section>
       <nav className="module-tabs">{modules.map(m => <button className={module === m ? 'current' : ''} key={m} onClick={() => setModule(m)}>{m}{m === 'Option Chain' && <span className="tab-count">{chain.length || '—'}</span>}</button>)}</nav>

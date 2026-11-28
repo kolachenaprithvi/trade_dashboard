@@ -53,3 +53,16 @@ html[data-theme="light"] .data-font-control{background:#fff;border-color:#d6dfe5
 .dashboard-market-metrics{grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);margin:0 0 16px}.dashboard-market-metrics .snapshot-metrics{grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.dashboard-market-metrics .snapshot-metrics div{min-width:0;justify-content:center}.dashboard-market-metrics .snapshot-metrics span{font-size:9px;font-weight:600}.dashboard-market-metrics .snapshot-metrics strong{font-size:clamp(16px,calc(var(--market-data-size) * .76),28px);font-weight:800;letter-spacing:-.3px}.dashboard-market-metrics .vix-summary{min-height:100px}.dashboard-market-metrics .vix-summary strong{color:#f5f8fc;font-size:clamp(22px,var(--market-data-size),36px);font-weight:800}.dashboard-market-metrics .vix-summary span{font-size:13px;font-weight:600;color:#c4ced8}.dashboard-market-metrics .vix-summary span.up{color:var(--green)}.dashboard-market-metrics .vix-summary span.down{color:var(--red)}
 html[data-theme="light"] .dashboard-market-metrics .vix-summary strong{color:#1f2c38}html[data-theme="light"] .dashboard-market-metrics .vix-summary span{color:#52616d}
 @media(max-width:700px){.dashboard-market-metrics{grid-template-columns:1fr}.dashboard-market-metrics .snapshot-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-market-metrics .metric-panel{min-height:0}}
+ 
+.dashboard-market-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+.oi-panel-caption{margin:8px 0 0;color:#7f8a96;font-size:clamp(9px,calc(var(--market-data-size) * .32),12px)}
+.oi-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+.oi-contract-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.oi-summary-grid>div{display:flex;min-width:0;flex-direction:column;justify-content:center;gap:7px;padding:10px;border:1px solid #242c36;border-radius:5px;background:#0e1318}
+.oi-summary-grid span{font:600 9px 'DM Mono',monospace;color:#78848f;white-space:nowrap}
+.oi-summary-grid strong{font:800 clamp(16px,calc(var(--market-data-size) * .66),26px) 'DM Mono',monospace;color:#dce2e8;white-space:nowrap}
+.oi-inline-error{margin-top:8px;color:var(--red);font-size:10px}
+html[data-theme="light"] .oi-summary-grid>div{background:#fff;border-color:#d8e0e6}
+html[data-theme="light"] .oi-summary-grid span,html[data-theme="light"] .oi-panel-caption{color:#586775}
+html[data-theme="light"] .oi-summary-grid strong{color:#263542}
+@media(max-width:700px){.dashboard-market-metrics .oi-summary-grid strong{font-size:clamp(14px,calc(var(--market-data-size) * .55),22px)}.dashboard-market-metrics .oi-summary-grid span{font-size:8px}}
